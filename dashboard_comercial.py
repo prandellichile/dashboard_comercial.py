@@ -2,12 +2,12 @@ import streamlit as st
 import pandas as pd
 import sqlite3
 
-st.set_page_config(page_title="Dashboard Comercial", layout="wide")
-st.title("📊 Dashboard Comercial con Comparativas y Evolución")
+st.set_page_config(page_title="Analytik Dashboard", layout="wide")
+st.title("📊 Analytik | Dashboard Comercial")
 
 @st.cache_data
 def cargar_datos():
-    conn = sqlite3.connect(r"D:\Proyectos\almacen_datos.db")
+    conn = sqlite3.connect("almacen_datos.db")  # Cambio clave: ruta relativa
     df = pd.read_sql_query("SELECT * FROM ventas", conn)
     conn.close()
     return df
@@ -15,48 +15,47 @@ def cargar_datos():
 df = cargar_datos()
 df.columns = df.columns.str.strip()
 
-# Validaciones iniciales
+# Validaciones mínimas
 required_cols = ["Monto Neto", "Razon Social", "Fecha Docto"]
 if not all(col in df.columns for col in required_cols):
-    st.error(f"❌ Faltan columnas requeridas: {', '.join([c for c in required_cols if c not in df.columns])}")
+    st.error("❌ El archivo no contiene todas las columnas necesarias.")
     st.stop()
 
-# Procesar fecha
+# Preparar fecha y columnas temporales
 df["Fecha Docto"] = pd.to_datetime(df["Fecha Docto"], errors="coerce")
 df = df[df["Fecha Docto"].notna()]
 df["Año"] = df["Fecha Docto"].dt.year
 df["MesNum"] = df["Fecha Docto"].dt.month
 
-# Diccionario de meses en español
 meses_es = ["Enero", "Febrero", "Marzo", "Abril", "Mayo", "Junio",
             "Julio", "Agosto", "Septiembre", "Octubre", "Noviembre", "Diciembre"]
-
 df["MesNombre"] = df["MesNum"].apply(lambda x: meses_es[x - 1])
 
-# --- Filtros dinámicos
-st.sidebar.header("🔎 Filtros")
-vendedores = df["Vendedor"].dropna().unique()
-clientes = df["Razon Social"].dropna().unique()
-anios = sorted(df["Año"].dropna().unique())
-meses_unicos = df["MesNombre"].dropna().unique()
+# 🎛️ Filtros
+st.sidebar.title("🔎 Filtros")
+filtros = {
+    "Vendedor": st.sidebar.multiselect("Vendedor", df["Vendedor"].dropna().unique(), default=None),
+    "Razon Social": st.sidebar.multiselect("Cliente", df["Razon Social"].dropna().unique(), default=None),
+    "Año": st.sidebar.multiselect("Año", sorted(df["Año"].dropna().unique()), default=None),
+    "Mes": st.sidebar.multiselect("Mes", meses_es, default=meses_es),
+    "Top N clientes": st.sidebar.slider("📌 Top N Clientes", 3, 30, 10)
+}
 
-vendedor_sel = st.sidebar.multiselect("Vendedor", vendedores, default=list(vendedores))
-cliente_sel = st.sidebar.multiselect("Razon Social", clientes, default=list(clientes))
-anio_sel = st.sidebar.multiselect("Año", anios, default=anios)
-mes_sel = st.sidebar.multiselect("Mes", meses_unicos, default=list(meses_unicos))
-top_n = st.sidebar.slider("📌 Mostrar Top N Clientes", min_value=3, max_value=30, value=10)
+# Aplicar filtros
+df_filtrado = df.copy()
+if filtros["Vendedor"]:
+    df_filtrado = df_filtrado[df_filtrado["Vendedor"].isin(filtros["Vendedor"])]
+if filtros["Razon Social"]:
+    df_filtrado = df_filtrado[df_filtrado["Razon Social"].isin(filtros["Razon Social"])]
+if filtros["Año"]:
+    df_filtrado = df_filtrado[df_filtrado["Año"].isin(filtros["Año"])]
+if filtros["Mes"]:
+    df_filtrado = df_filtrado[df_filtrado["MesNombre"].isin(filtros["Mes"])]
 
-# --- Aplicar filtros
-df_filtrado = df[
-    df["Vendedor"].isin(vendedor_sel) &
-    df["Razon Social"].isin(cliente_sel) &
-    df["Año"].isin(anio_sel) &
-    df["MesNombre"].isin(mes_sel)
-]
+# 📊 KPIs: comparativa Año vs Año anterior
+st.subheader("📈 Indicadores principales")
 
-# --- Comparativas Año vs Año Anterior
-st.markdown("### 📊 Comparativas Año Actual vs Año Anterior")
-años_ordenados = sorted(anio_sel)
+años_ordenados = sorted(df_filtrado["Año"].dropna().unique())
 if len(años_ordenados) >= 2:
     actual, anterior = años_ordenados[-1], años_ordenados[-2]
     df_actual = df_filtrado[df_filtrado["Año"] == actual]
@@ -64,104 +63,68 @@ if len(años_ordenados) >= 2:
 
     ventas_actual = df_actual["Monto Neto"].sum()
     ventas_anterior = df_anterior["Monto Neto"].sum()
-    delta_pct = round(((ventas_actual - ventas_anterior) / ventas_anterior * 100), 1) if ventas_anterior else 0
+    delta_pct = round(((ventas_actual - ventas_anterior) / ventas_anterior * 100), 1) if ventas_anterior else None
 
-    clientes_actual = df_actual["Razon Social"].nunique()
-    clientes_anterior = df_anterior["Razon Social"].nunique()
-    delta_cli_pct = round(((clientes_actual - clientes_anterior) / clientes_anterior * 100), 1) if clientes_anterior else 0
+    cli_actual = df_actual["Razon Social"].nunique()
+    cli_anterior = df_anterior["Razon Social"].nunique()
+    delta_cli = round(((cli_actual - cli_anterior) / cli_anterior * 100), 1) if cli_anterior else None
 
-    ticket_actual = ventas_actual / clientes_actual if clientes_actual else 0
-    ticket_anterior = ventas_anterior / clientes_anterior if clientes_anterior else 0
-    delta_ticket_pct = round(((ticket_actual - ticket_anterior) / ticket_anterior * 100), 1) if ticket_anterior else 0
+    ticket_actual = ventas_actual / cli_actual if cli_actual else 0
+    ticket_anterior = ventas_anterior / cli_anterior if cli_anterior else 0
+    delta_ticket = round(((ticket_actual - ticket_anterior) / ticket_anterior * 100), 1) if ticket_anterior else None
 else:
-    actual = años_ordenados[-1]
-    ventas_actual = df_filtrado["Monto Neto"].sum()
-    clientes_actual = df_filtrado["Razon Social"].nunique()
-    ticket_actual = ventas_actual / clientes_actual if clientes_actual else 0
-    delta_pct = delta_cli_pct = delta_ticket_pct = None
+    actual = años_ordenados[-1] if años_ordenados else "-"
+    ventas_actual, cli_actual, ticket_actual = 0, 0, 0
+    delta_pct = delta_cli = delta_ticket = None
 
-# --- KPIs visuales
-# --- KPIs visuales protegidos y con delta_color corregido
 col1, col2, col3 = st.columns(3)
+col1.metric(f"💰 Ventas {actual}", f"${ventas_actual:,.0f}",
+            f"{delta_pct:+.1f}%" if delta_pct is not None else "Sin comparación",
+            delta_color="inverse" if delta_pct is not None and delta_pct < 0 else "normal")
 
-col1.metric(
-    label=f"💰 Ventas {actual}",
-    value=f"${ventas_actual:,.0f}",
-    delta=f"{delta_pct:+.1f}%" if delta_pct is not None else "Sin comparación",
-    delta_color="inverse" if delta_pct is not None and delta_pct < 0 else "normal"
-)
+col2.metric(f"👥 Clientes {actual}", cli_actual,
+            f"{delta_cli:+.1f}%" if delta_cli is not None else "Sin comparación",
+            delta_color="inverse" if delta_cli is not None and delta_cli < 0 else "normal")
 
-col2.metric(
-    label=f"👥 Clientes {actual}",
-    value=clientes_actual,
-    delta=f"{delta_cli_pct:+.1f}%" if delta_cli_pct is not None else "Sin comparación",
-    delta_color="inverse" if delta_cli_pct is not None and delta_cli_pct < 0 else "normal"
-)
+col3.metric("🎟️ Ticket Promedio", f"${ticket_actual:,.0f}",
+            f"{delta_ticket:+.1f}%" if delta_ticket is not None else "Sin comparación",
+            delta_color="inverse" if delta_ticket is not None and delta_ticket < 0 else "normal")
 
-col3.metric(
-    label=f"🎟️ Ticket Promedio",
-    value=f"${ticket_actual:,.0f}",
-    delta=f"{delta_ticket_pct:+.1f}%" if delta_ticket_pct is not None else "Sin comparación",
-    delta_color="inverse" if delta_ticket_pct is not None and delta_ticket_pct < 0 else "normal"
-)
-
-def colorear_porcentaje(valor):
-    color = "red" if valor < 0 else "green"
-    return f'<span style="color:{color}">{valor:+.1f}%</span>'
-
-st.markdown(f"💰 Variación en Ventas: {colorear_porcentaje(delta_pct)}", unsafe_allow_html=True)
-
-# --- Alertas si hay caída significativa
-if delta_pct is not None and delta_pct < -20:
-    st.warning(f"⚠️ Las ventas cayeron más de 20% respecto al año {anterior}.")
-if delta_cli_pct is not None and delta_cli_pct < -20:
-    st.warning(f"⚠️ La cantidad de clientes disminuyó más de 20% respecto a {anterior}.")
-if delta_ticket_pct is not None and delta_ticket_pct < -20:
-    st.warning(f"⚠️ El ticket promedio cayó más de 20% respecto al año anterior.")
-
-# --- Ventas por vendedor
-st.subheader("📈 Ventas por Vendedor (por Año)")
-ventas_vendedor = df_filtrado.groupby(["Año", "Vendedor"])["Monto Neto"].sum().reset_index()
-pivot_ventas = ventas_vendedor.pivot(index="Vendedor", columns="Año", values="Monto Neto").fillna(0)
-st.dataframe(pivot_ventas.style.format("${:,.0f}"))
-
-# --- Top N clientes
-st.subheader(f"🏢 Top {top_n} Clientes")
+# 🏢 Top N Clientes
+st.subheader(f"🏢 Top {filtros['Top N clientes']} Clientes por ventas")
 top_clientes = (
     df_filtrado.groupby("Razon Social")["Monto Neto"]
     .sum()
     .sort_values(ascending=False)
-    .head(top_n)
+    .head(filtros["Top N clientes"])
 )
 st.bar_chart(top_clientes)
 
-# --- Evolución mensual en orden cronológico
-st.subheader("📆 Evolución Mensual de Ventas")
+# 📆 Evolución mensual
+st.subheader("📆 Evolución mensual de ventas")
 evolucion = df_filtrado.groupby(["Año", "MesNum"])["Monto Neto"].sum().reset_index()
 evolucion["FechaEje"] = pd.to_datetime(evolucion["Año"].astype(str) + "-" + evolucion["MesNum"].astype(str) + "-01")
 evolucion = evolucion.sort_values("FechaEje")
 
-# Etiquetas simplificadas si solo hay un año
-if len(anio_sel) == 1:
-    evolucion["Periodo"] = evolucion["MesNum"].apply(lambda x: meses_es[x - 1])
+if len(años_ordenados) == 1:
+    evolucion["Etiqueta"] = evolucion["MesNum"].apply(lambda x: meses_es[x - 1])
 else:
-    evolucion["Periodo"] = evolucion["MesNum"].apply(lambda x: meses_es[x - 1]) + " " + evolucion["Año"].astype(str)
+    evolucion["Etiqueta"] = evolucion["MesNum"].apply(lambda x: meses_es[x - 1]) + " " + evolucion["Año"].astype(str)
 
-# Mostrar gráfico
-st.line_chart(evolucion.set_index("FechaEje")["Monto Neto"])
-
-# Marcar mes de mayor venta
 if not evolucion.empty:
-    mes_pico = evolucion.loc[evolucion["Monto Neto"].idxmax()]
-    st.success(f"📈 Mayor venta: {mes_pico['Periodo']} → ${mes_pico['Monto Neto']:,.0f}")
+    st.line_chart(evolucion.set_index("FechaEje")["Monto Neto"])
+    mes_max = evolucion.loc[evolucion["Monto Neto"].idxmax()]
+    st.success(f"📈 Pico de ventas: {mes_max['Etiqueta']} → ${mes_max['Monto Neto']:,.0f}")
+else:
+    st.info("No hay evolución mensual para mostrar.")
 
-# --- Detalle y descarga
-st.subheader("📄 Detalle de Transacciones")
+# 📋 Tabla y descarga
+st.subheader("📄 Detalle de registros")
 st.dataframe(df_filtrado)
 
 st.download_button(
-    label="📥 Descargar datos filtrados",
-    data=df_filtrado.to_csv(index=False),
-    file_name="reporte_filtrado.csv",
+    label="📥 Descargar CSV",
+    data=df_filtrado.to_csv(index=False).encode("utf-8"),
+    file_name="reporte_comercial.csv",
     mime="text/csv"
 )
